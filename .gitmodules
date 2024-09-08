@@ -1,0 +1,6 @@
+[submodule "pdf-cleaner"]
+	path = pdf-cleaner
+	url = git@github.com:mp2i-thiers/pdf-cleaner.git
+[submodule "pdf_cleaner"]
+	path = pdf_cleaner
+	url = git@github.com:mp2i-thiers/pdf-cleaner.git
