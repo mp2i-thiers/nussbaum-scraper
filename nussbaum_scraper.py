@@ -1,106 +1,99 @@
-import os
-from html.parser import HTMLParser
-import requests
-from pdf_cleaner.pdf_cleaner import clean_pdf
+import re
 import tempfile
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import urljoin
 
-BASE_URL = "https://nussbaumcpge.be/public_html/Sup/MP2I/"
+import requests
+
+from pdf_cleaner.pdf_cleaner import clean_pdf
+
+BASE_URL = "https://nussbaumcpge.be/classe/MP2I/"
 
 
-class NussbaumScraper(HTMLParser):
-    base_url: str
-    in_menu = False
-
-    def __init__(self, base_url):
+class TableParser(HTMLParser):
+    def __init__(self):
         super().__init__()
-        self.base_url = base_url
+        self.current_name = ""
+        self.current_table = []
+        self.in_table = False
+        self.in_th = False
+        self.tables = []
 
     def handle_starttag(self, tag, attrs):
-        attrs_dict = dict(attrs)
+        if tag == "table":
+            self.in_table = True
+            self.current_table = []
+        elif tag == "th":
+            self.in_th = True
+        elif tag == "a" and self.in_table:
+            if (href := dict(attrs).get("href", "")).endswith(".pdf"):
+                self.current_table.append(href)
 
-        if tag == "ul" and attrs_dict.get("id") == "onglets":
-            self.in_menu = True
-        elif tag == "a" and self.in_menu and attrs_dict.get("href") != "index.php":
-            tab_parser = self._TabParser(self.base_url, attrs_dict["href"])
-            tab_parser.parse()
+    def handle_data(self, data):
+        if self.in_th and (name := data.strip()):
+            self.current_name = name.replace("/", "-")
 
     def handle_endtag(self, tag):
-        if tag == "ul" and self.in_menu:
-            self.in_menu = False
-
-    def parse(self):
-        data = _make_request(self.base_url + "index.php")
-        self.feed(data)
-
-    class _TabParser(HTMLParser):
-        base_url: str
-        tab_name: str
-
-        in_lessons_list = False
-
-        def __init__(self, base_url, tab_name):
-            super().__init__()
-            self.base_url = base_url
-            self.tab_name = tab_name
-
-        def handle_starttag(self, tag, attrs):
-            attrs_dict = dict(attrs)
-
-            if tag == "div" and attrs_dict.get("class") == "column1":
-                self.in_lessons_list = True
-            elif tag == "a" and self.in_lessons_list and attrs_dict["href"].endswith(".pdf"):
-                _download_and_clean_pdf(
-                    self.base_url + attrs_dict["href"],
-                    self.tab_name.removesuffix(".php"),
-                    attrs_dict["href"]
-                )
-
-        def handle_endtag(self, tag):
-            if tag == "div" and self.in_lessons_list:
-                self.in_lessons_list = False
-
-        def parse(self):
-            data = _make_request(self.base_url + self.tab_name)
-
-            print(f"Parsing '{self.tab_name}'")
-
-            self.feed(data)
+        if tag == "table" and self.in_table:
+            self.tables.append((self.current_name, self.current_table))
+            self.in_table = False
+        elif tag == "th":
+            self.in_th = False
 
 
-def _make_request(url: str) -> str:
-    r = requests.get(url)
-    if r.status_code != 200:
-        raise requests.RequestException()
+def scrape_pdfs(base_url: str, output_dir: str = "nussbaum") -> list:
+    resp = requests.get(base_url)
+    resp.raise_for_status()
 
-    return r.text
+    if not (pages := re.findall(r'href="([^"]*\?classe=MP2I)"', resp.text)):
+        raise RuntimeError("No nav links found, the site's structure has probably changed")
+
+    downloaded = []
+
+    for link in pages:
+        page_resp = requests.get(urljoin(base_url, link))
+        page_resp.raise_for_status()
+
+        page_name = link.split("/")[-2]
+
+        parser = TableParser()
+        parser.feed(page_resp.text)
+
+        for table_name, pdf_links in parser.tables:
+            table_dir = Path(output_dir) / page_name / table_name
+            table_dir.mkdir(parents=True, exist_ok=True)
+
+            for pdf_link in pdf_links:
+                file_path = table_dir / Path(pdf_link).name
+                if download_and_clean_pdf(urljoin(base_url, pdf_link), file_path):
+                    downloaded.append(str(file_path))
+
+    return downloaded
 
 
-def _download_and_clean_pdf(url: str, directory: str, file_name: str):
-    print(f"Starting to download {directory}/{file_name}")
+def download_and_clean_pdf(url: str, file_path: Path) -> bool:
+    try:
+        resp = requests.get(url, stream=True)
+        resp.raise_for_status()
 
-    abs_dir = os.path.join(os.getcwd(), f"nussbaum/{directory}")
-    if not os.path.exists(abs_dir):
-        os.makedirs(abs_dir)
-
-    r = requests.get(url, stream=True)
-
-    file_path = os.path.join(abs_dir, file_name)
-
-    with tempfile.NamedTemporaryFile("wb", delete=False) as temp:
-        # Using chunks to save some RAM in case of large files.
-        # (And 2048 is a nice number)
-        for chunk in r.iter_content(2048):
-            temp.write(chunk)
-        temp.close()
-
-        print(f"Cleaning {directory}/{file_name}")
-        try:
+        with tempfile.NamedTemporaryFile("wb", delete_on_close=False) as temp:
+            # Using chunks to save some RAM in case of large files.
+            # (And 2048 is a nice number)
+            for chunk in resp.iter_content(2048):
+                temp.write(chunk)
+            temp.close()
             clean_pdf(temp.name, file_path)
-        except RuntimeError as err:
-            print(f"Error ({directory}/{file_name}): {err}")
 
-    print(f"Done with {directory}/{file_name}\n")
+        print(f"Downloaded and cleaned {file_path}")
+        return True
+
+    except requests.exceptions.HTTPError as e:
+        print(f"Failed to fetch {file_path}: {e.response.status_code}")
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
+    return False
 
 
 if __name__ == "__main__":
-    NussbaumScraper(BASE_URL).parse()
+    scrape_pdfs(BASE_URL)
