@@ -1,4 +1,5 @@
 import re
+import shutil
 import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
@@ -27,7 +28,7 @@ class TableParser(HTMLParser):
         elif tag == "th":
             self.in_th = True
         elif tag == "a" and self.in_table:
-            if (href := dict(attrs).get("href", "")).endswith(".pdf"):
+            if (href := dict(attrs).get("href", "")).endswith((".pdf", ".zip")):
                 self.current_table.append(href)
 
     def handle_data(self, data):
@@ -42,7 +43,7 @@ class TableParser(HTMLParser):
             self.in_th = False
 
 
-def scrape_pdfs(base_url: str, output_dir: str = "nussbaum") -> list:
+def scrape_files(base_url: str, output_dir: str = "nussbaum") -> list:
     resp = requests.get(base_url)
     resp.raise_for_status()
 
@@ -51,28 +52,28 @@ def scrape_pdfs(base_url: str, output_dir: str = "nussbaum") -> list:
 
     downloaded = []
 
-    for link in pages:
-        page_resp = requests.get(urljoin(base_url, link))
+    for page in pages:
+        page_resp = requests.get(urljoin(base_url, page))
         page_resp.raise_for_status()
 
-        page_name = link.split("/")[-2]
+        page_name = page.split("/")[-2]
 
         parser = TableParser()
         parser.feed(page_resp.text)
 
-        for table_name, pdf_links in parser.tables:
+        for table_name, links in parser.tables:
             table_dir = Path(output_dir) / page_name / table_name
             table_dir.mkdir(parents=True, exist_ok=True)
 
-            for pdf_link in pdf_links:
-                file_path = table_dir / Path(pdf_link).name
-                if download_and_clean_pdf(urljoin(base_url, pdf_link), file_path):
+            for link in links:
+                file_path = table_dir / Path(link).name
+                if download_and_clean(urljoin(base_url, link), file_path):
                     downloaded.append(str(file_path))
 
     return downloaded
 
 
-def download_and_clean_pdf(url: str, file_path: Path) -> bool:
+def download_and_clean(url: str, file_path: Path) -> bool:
     try:
         resp = requests.get(url, stream=True)
         resp.raise_for_status()
@@ -83,7 +84,10 @@ def download_and_clean_pdf(url: str, file_path: Path) -> bool:
             for chunk in resp.iter_content(2048):
                 temp.write(chunk)
             temp.close()
-            clean_pdf(temp.name, file_path)
+            if url.endswith(".zip"):
+                shutil.copy(temp.name, file_path)
+            else:
+                clean_pdf(temp.name, file_path.as_posix())
 
         print(f"Downloaded and cleaned {file_path}")
         return True
@@ -96,4 +100,4 @@ def download_and_clean_pdf(url: str, file_path: Path) -> bool:
 
 
 if __name__ == "__main__":
-    scrape_pdfs(BASE_URL)
+    scrape_files(BASE_URL)
