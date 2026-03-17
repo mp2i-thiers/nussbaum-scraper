@@ -2,8 +2,7 @@
 
 Un web scraper écrit en Python qui permet de télécharger tous les cours d'informatique de MP2I.
 
-De plus, le programme va automatiquement simplifier chaque fichier PDF avec [mp2i-thiers/pdf-cleaner](https://github.com/mp2i-thiers/pdf-cleaner), 
-pour améliorer leur lisibilité.
+De plus, le programme va automatiquement simplifier chaque fichier PDF pour améliorer leur lisibilité.
 
 ## ⚠️ Avertissement
 

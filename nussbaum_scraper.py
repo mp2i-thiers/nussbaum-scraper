@@ -5,9 +5,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
 
+import fitz
 import requests
-
-from pdf_cleaner.pdf_cleaner import clean_pdf
 
 BASE_URL = "https://nussbaumcpge.be/classe/MP2I/"
 
@@ -41,6 +40,18 @@ class TableParser(HTMLParser):
             self.in_table = False
         elif tag == "th":
             self.in_th = False
+
+
+def clean_pdf(input_path: str, output_path: str) -> None:
+    doc = fitz.open(input_path)
+    if len(doc) < 8:
+        shutil.copy2(input_path, output_path)
+        return
+
+    labels = [p.get_label() or str(i) for i, p in enumerate(doc)]
+
+    doc.select([i for i in range(len(labels)) if i == len(labels) - 1 or labels[i] != labels[i + 1]])
+    doc.save(output_path, garbage=4)
 
 
 def scrape_files(base_url: str, output_dir: str = "nussbaum") -> list:
